@@ -22,6 +22,8 @@ enum
   CN_LIU,       /* 流 */
   CN_BAO,       /* 保 */
   CN_HU,        /* 护 */
+  CN_GONG,      /* 功 */
+  CN_LV,        /* 率 */
   CN_NUM
 };
 

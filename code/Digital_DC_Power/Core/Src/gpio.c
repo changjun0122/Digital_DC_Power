@@ -134,20 +134,44 @@ void RelaySet(GPIO_TypeDef *port, uint16_t pin, uint8_t state)
                     (state == OPENPOWER) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
+/* 异步开输出：记录待合闸的档位，由主循环轮询到点执行 */
+static uint8_t  pendingVol    = VOL_5V0;
+static uint8_t  pendingActive = 0U;
+static uint32_t pendingTick   = 0U;
+
 /**
-  * @brief  打开指定档位输出
-  * @note   顺序：先全断 -> 再设 PD 档位 -> 等协商完成 -> 只合目标路。
-  *         先断是为了避免旧档仍在导通时 VBUS 跳变直接打到负载上；
-  *         之后 break-before-make 保证任意时刻只有一路接到输出端。
+  * @brief  请求打开指定档位输出（非阻塞，立即返回）
+  * @note   先全断，避免旧档仍在导通时 VBUS 跳变直接打到负载上；
+  *         设好 PD 档位后只登记，由 PowerSwitchPoll() 在协商完成后合闸。
   */
 void OpenPowerSwitch(uint8_t vol)
 {
   ClosePowerSwitch();
-
   setch224(vol);
-  HAL_Delay(PD_SETTLE_MS);
 
-  switch (vol)
+  pendingVol    = vol;
+  pendingTick   = HAL_GetTick();
+  pendingActive = 1U;
+}
+
+/**
+  * @brief  合闸轮询（主循环调用）：PD 协商时间到后只合目标路
+  */
+void PowerSwitchPoll(void)
+{
+  if (pendingActive == 0U)
+  {
+    return;
+  }
+
+  if ((HAL_GetTick() - pendingTick) < PD_SETTLE_MS)
+  {
+    return;
+  }
+
+  pendingActive = 0U;
+
+  switch (pendingVol)
   {
     case VOL_1V8: RelaySet(CON_1V8_GPIO_Port, CON_1V8_Pin, OPENPOWER); break;
     case VOL_3V3: RelaySet(CON_3V3_GPIO_Port, CON_3V3_Pin, OPENPOWER); break;
@@ -159,10 +183,12 @@ void OpenPowerSwitch(uint8_t vol)
 }
 
 /**
-  * @brief  关闭全部输出（保护动作 / 待机态）
+  * @brief  关闭全部输出（保护动作 / 待机态），并取消未完成的合闸
   */
 void ClosePowerSwitch(void)
 {
+  pendingActive = 0U;
+
   RelaySet(CON_1V8_GPIO_Port, CON_1V8_Pin, CLOSEPOWER);
   RelaySet(CON_3V3_GPIO_Port, CON_3V3_Pin, CLOSEPOWER);
   RelaySet(CON_VBUS_GPIO_Port, CON_VBUS_Pin, CLOSEPOWER);

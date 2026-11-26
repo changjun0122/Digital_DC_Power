@@ -85,12 +85,16 @@ typedef enum
 #define UI_VALUE_X          36U
 #define UI_GEAR_X           96U
 #define UI_THRESH_X         92U
-/* 行（页）：状态 / 保护详情 / 电压 / 功率统计 / 电流 */
+/* 行（页）：每行 16px 占两页，四行正好铺满 64px */
 #define UI_ROW_STATUS       0U
-#define UI_ROW_DETAIL       2U
-#define UI_ROW_VOL          3U
-#define UI_ROW_STAT         5U
-#define UI_ROW_CUR          6U
+#define UI_ROW_VOL          2U
+#define UI_ROW_CUR          4U
+#define UI_ROW_PWR          6U
+/* 每行的下半页：8px ASCII 数值与 16px 汉字底边对齐 */
+#define UI_TXT_STATUS       1U
+#define UI_TXT_VOL          3U
+#define UI_TXT_CUR          5U
+#define UI_TXT_PWR          7U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -121,6 +125,13 @@ static uint32_t volHoldStart = 0U;     /* 切档时刻，用于电压显示静�
 static uint8_t  repeatKey = NoPRESS;   /* 正在连发的按键 */
 static uint32_t repeatStartTick = 0U;
 static uint32_t lastRepeatTick = 0U;
+
+/* 屏幕内容缓存：与上次发送的字符串比对，未变则不重发 */
+static char uiVolStr[8] = {0};
+static char uiCurStr[8] = {0};
+static char uiThrStr[8] = {0};
+static char uiPwrStr[8] = {0};
+static char uiEngStr[12] = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -136,7 +147,8 @@ void UpdateShowUI(uint8_t refresh);
 void ShowProtectDetail(void);
 void FormatVol(char *s, uint32_t mv);
 void FormatMa(char *s, uint32_t ma);
-void FormatStat(char *s);
+void FormatPower(char *s);
+void FormatEnergy(char *s);
 const char *GearName(uint8_t vol);
 void StepVol(int8_t dir);
 void StepProtect(int8_t dir);
@@ -207,6 +219,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    PowerSwitchPoll();
     keyValue = keyScanf();
     if (keyValue != NoPRESS)
     {
@@ -279,6 +292,52 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
+/**
+  * @brief  内容变化才发送，避免每 200ms 重刷同一行占用 I2C
+  */
+static void ShowIfChanged(uint8_t x, uint8_t page, const char *s, char *cache)
+{
+  uint8_t i = 0U;
+
+  while ((s[i] != '\0') && (s[i] == cache[i]))
+  {
+    i++;
+  }
+
+  if ((s[i] == '\0') && (cache[i] == '\0'))
+  {
+    return;
+  }
+
+  OLED_ShowString(x, page, s, 0U);
+
+  i = 0U;
+  do
+  {
+    cache[i] = s[i];
+  } while (s[i++] != '\0');
+}
+
+/**
+  * @brief  清屏后缓存与屏幕不一致，必须同步作废
+  */
+static void UiCacheReset(void)
+{
+  uint8_t i;
+
+  for (i = 0U; i < 12U; i++)
+  {
+    if (i < 8U)
+    {
+      uiVolStr[i] = '\0';
+      uiCurStr[i] = '\0';
+      uiThrStr[i] = '\0';
+      uiPwrStr[i] = '\0';
+    }
+    uiEngStr[i] = '\0';
+  }
+}
+
 void FormatVol(char *s, uint32_t mv)
 {
   uint32_t v = mv / 10U;
@@ -293,15 +352,34 @@ void FormatVol(char *s, uint32_t mv)
   s[6] = '\0';
 }
 
-void FormatCur(char *s, uint32_t ma)
+void FormatPower(char *s)
 {
-  s[0] = (ma >= 1000U) ? (char)('0' + (ma / 1000U) % 10U) : ' ';
-  s[1] = (ma >= 100U)  ? (char)('0' + (ma / 100U) % 10U)  : ' ';
-  s[2] = (ma >= 10U)   ? (char)('0' + (ma / 10U) % 10U)   : ' ';
-  s[3] = (char)('0' + (ma % 10U));
-  s[4] = 'M';
-  s[5] = 'A';
-  s[6] = '\0';
+  uint32_t w  = powerMw / 1000U;
+  uint32_t wf = (powerMw % 1000U) / 100U;   /* 0.1W 分辨率 */
+
+  s[0] = (w >= 10U) ? (char)('0' + (w / 10U) % 10U) : ' ';
+  s[1] = (char)('0' + (w % 10U));
+  s[2] = '.';
+  s[3] = (char)('0' + wf);
+  s[4] = 'W';
+  s[5] = '\0';
+}
+
+void FormatEnergy(char *s)
+{
+  uint32_t eWh = energyUwh / 1000000UL;
+  uint32_t em  = (energyUwh % 1000000UL) / 10000UL;   /* 0.01Wh 分辨率 */
+
+  s[0] = 'E';
+  s[1] = (char)('0' + (eWh / 100U) % 10U);
+  s[2] = (char)('0' + (eWh / 10U) % 10U);
+  s[3] = (char)('0' + (eWh % 10U));
+  s[4] = '.';
+  s[5] = (char)('0' + (em / 10U) % 10U);
+  s[6] = (char)('0' + (em % 10U));
+  s[7] = 'W';
+  s[8] = 'H';
+  s[9] = '\0';
 }
 
 void FormatMa(char *s, uint32_t ma)
@@ -360,10 +438,16 @@ void SampleAndCalc(void)
   uint16_t i;
   uint16_t volAvg;
   uint16_t curAvg;
+  uint32_t now;
+  uint32_t dt;
 
   for (i = 0U; i < SAMPLE_NUM; i++)
   {
-    HAL_ADC_Start(&hadc);
+    if (HAL_ADC_Start(&hadc) != HAL_OK)
+    {
+      HAL_ADC_Stop(&hadc);
+      return;   /* 保留上一次有效结果，避免 0 值引发误保护 */
+    }
     adcCurBuf[i] = getAdcValue();
     adcVolBuf[i] = getAdcValue();
     HAL_ADC_Stop(&hadc);
@@ -374,10 +458,22 @@ void SampleAndCalc(void)
 
   volMv = ((uint32_t)volAvg * VOL_FULL_MV) / ADC_FULL;
   curMa = ((uint32_t)curAvg * CUR_FULL_MA) / ADC_FULL;
+  powerMw = (volMv * curMa) / 1000U;
+
+  now = HAL_GetTick();
+  dt = now - lastEnergyTick;
+  lastEnergyTick = now;
+
+  /* 只在输出开启且间隔正常时积分，防止阻塞后补算虚高 */
+  if ((systemparam.isOpen == ENABLE) && (dt < 1000U))
+  {
+    energyUwh += (powerMw * dt) / 3600UL;
+  }
 }
 
 void ProtectCheck(void)
 {
+  uint8_t  idx;
   uint32_t underLimit;
 
   if (systemparam.isOpen != ENABLE)
@@ -393,41 +489,41 @@ void ProtectCheck(void)
 
   if (curMa > (uint32_t)systemparam.protectValue)
   {
-    ClosePowerSwitch();
-    systemparam.isOpen = DISABLE;
-    protectFlag = 1U;
-    UpdateShowUI(1U);
+    tripMa = curMa;
+    tripMv = volMv;
+    ProtectTrip(PROT_OCP);
     return;
   }
 
-  switch (systemparam.setVolValue)
-  {
-    case VOL_1V8: underLimit = 1000U; break;
-    case VOL_3V3: underLimit = 2000U; break;
-    case VOL_5V0: underLimit = 3000U; break;
-    case VOL_9V0: underLimit = 5000U; break;
-    case VOL_12V: underLimit = 7000U; break;
-    default:      underLimit = 0U;    break;
-  }
+  idx = (uint8_t)(systemparam.setVolValue - VOL_1V8);
+  underLimit = (idx < 5U) ? underLimitMv[idx] : 0U;
 
   if (volMv < underLimit)
   {
-    ClosePowerSwitch();
-    systemparam.isOpen = DISABLE;
-    protectFlag = 1U;
-    UpdateShowUI(1U);
+    tripMa = curMa;
+    tripMv = volMv;
+    ProtectTrip(PROT_UVP);
   }
+}
+
+void ProtectTrip(ProtectReason reason)
+{
+  ClosePowerSwitch();
+  systemparam.isOpen = DISABLE;
+  protectReason = reason;
+  UpdateShowUI(1U);
 }
 
 void DefaultShowUI(void)
 {
   OLED_Clear();
+  UiCacheReset();
   UpdateShowUI(1U);
 }
 
 void UpdateShowUI(uint8_t refresh)
 {
-  char buf[8];
+  char buf[24];
 
   if (refresh != 0U)
   {
@@ -438,54 +534,97 @@ void UpdateShowUI(uint8_t refresh)
     uint8_t gearLen = 0U;
     uint8_t gearX;
 
-    OLED_ShowCN(0U,  0U, CN_SHU,  invPow);
-    OLED_ShowCN(16U, 0U, CN_CHU,  invPow);
-    OLED_ShowCN(0U,  3U, CN_DIAN, invVol);
-    OLED_ShowCN(16U, 3U, CN_YA,   invVol);
-    OLED_ShowCN(0U,  6U, CN_DIAN, invCur);
-    OLED_ShowCN(16U, 6U, CN_LIU,  invCur);
+    OLED_ShowCN(UI_LABEL_X, UI_ROW_STATUS, CN_SHU, invPow);
+    OLED_ShowCN(16U, UI_ROW_STATUS, CN_CHU, invPow);
+    OLED_ShowCN(UI_LABEL_X, UI_ROW_VOL, CN_DIAN, invVol);
+    OLED_ShowCN(16U, UI_ROW_VOL, CN_YA, invVol);
+    OLED_ShowCN(UI_LABEL_X, UI_ROW_CUR, CN_DIAN, invCur);
+    OLED_ShowCN(16U, UI_ROW_CUR, CN_LIU, invCur);
+    OLED_ShowCN(UI_LABEL_X, UI_ROW_PWR, CN_GONG, 0U);
+    OLED_ShowCN(16U, UI_ROW_PWR, CN_LV, 0U);
 
-    OLED_ClearBlock(36U, 0U, 16U);
-    OLED_ShowCN(36U, 0U, (systemparam.isOpen == ENABLE) ? CN_KAI : CN_GUAN, 0U);
-
-    OLED_ClearBlock(96U, 0U, 32U);
-    if (protectFlag != 0U)
-    {
-      OLED_ShowCN(96U,  0U, CN_BAO, 0U);
-      OLED_ShowCN(112U, 0U, CN_HU,  0U);
-    }
+    /* 状态行右侧整段清空，保护详情直接画在同一行 */
+    OLED_ClearBlock(UI_VALUE_X, UI_ROW_STATUS, 32U);
+    OLED_ClearBlock(68U, UI_ROW_STATUS, 32U);
+    OLED_ClearBlock(100U, UI_ROW_STATUS, 28U);
+    OLED_ShowCN(UI_VALUE_X, UI_ROW_STATUS,
+                (systemparam.isOpen == ENABLE) ? CN_KAI : CN_GUAN, 0U);
 
     while (gear[gearLen] != '\0')
     {
       gearLen++;
     }
     gearX = (uint8_t)(OLED_WIDTH - ((uint16_t)gearLen * OLED_CHAR_W));
-    OLED_ClearBlock(96U, 4U, 32U);
-    OLED_ShowString(gearX, 4U, gear, 0U);
+    OLED_ClearBlock(UI_GEAR_X, UI_ROW_VOL, 32U);
+    OLED_ShowString(gearX, UI_TXT_VOL, gear, 0U);
+
+    ShowProtectDetail();
   }
 
   if ((volHoldStart != 0U) &&
       ((HAL_GetTick() - volHoldStart) < VOL_SETTLE_MS))
   {
-    OLED_ShowString(36U, 4U, "--.--V", 0U);
+    ShowIfChanged(UI_VALUE_X, UI_TXT_VOL, "--.--V", uiVolStr);
   }
   else
   {
     FormatVol(buf, volMv);
-    OLED_ShowString(36U, 4U, buf, 0U);
+    ShowIfChanged(UI_VALUE_X, UI_TXT_VOL, buf, uiVolStr);
   }
 
-  FormatCur(buf, curMa);
-  OLED_ShowString(36U, 7U, buf, 0U);
+  FormatMa(buf, curMa);
+  ShowIfChanged(UI_VALUE_X, UI_TXT_CUR, buf, uiCurStr);
 
   FormatMa(buf, systemparam.protectValue);
-  OLED_ShowString(92U, 7U, buf, 0U);
+  ShowIfChanged(UI_THRESH_X, UI_TXT_CUR, buf, uiThrStr);
+
+  FormatPower(buf);
+  ShowIfChanged(UI_VALUE_X, UI_TXT_PWR, buf, uiPwrStr);
+
+  FormatEnergy(buf);
+  ShowIfChanged(72U, UI_TXT_PWR, buf, uiEngStr);
+}
+
+void ShowProtectDetail(void)
+{
+  char buf[11];
+  char tmp[8];
+  uint8_t i;
+
+  if (protectReason == PROT_NONE)
+  {
+    return;   /* 状态行右侧已被整体清空 */
+  }
+
+  if (protectReason == PROT_OCP)
+  {
+    FormatMa(tmp, tripMa);
+    buf[0] = 'O'; buf[1] = 'C'; buf[2] = 'P'; buf[3] = ' ';
+    for (i = 0U; i < 4U; i++)
+    {
+      buf[4U + i] = tmp[i];
+    }
+    buf[8] = 'M'; buf[9] = 'A';
+  }
+  else
+  {
+    FormatVol(tmp, tripMv);
+    buf[0] = 'U'; buf[1] = 'V'; buf[2] = 'P'; buf[3] = ' ';
+    for (i = 0U; i < 6U; i++)
+    {
+      buf[4U + i] = tmp[i];
+    }
+  }
+  buf[10] = '\0';
+
+  OLED_ShowString(56U, UI_TXT_STATUS, buf, 0U);
 }
 
 void KeyHandle(uint8_t key)
 {
   if (key == SW1PRESS)
   {
+    repeatKey = NoPRESS;
     systemparam.currentPage = (systemparam.currentPage >= CUR_PAGE)
                               ? POWER_PAGE
                               : (uint8_t)(systemparam.currentPage + 1U);
@@ -496,6 +635,7 @@ void KeyHandle(uint8_t key)
   switch (systemparam.currentPage)
   {
     case POWER_PAGE:
+      repeatKey = NoPRESS;
       if (key == SW2PRESS)
       {
         if (systemparam.isOpen == ENABLE)
@@ -505,10 +645,11 @@ void KeyHandle(uint8_t key)
         }
         else
         {
-          protectFlag = 0U;
+          protectReason = PROT_NONE;
           OpenPowerSwitch(systemparam.setVolValue);
           systemparam.isOpen = ENABLE;
           lastOpenTick = HAL_GetTick();
+          volHoldStart = lastOpenTick;   /* 合闸前电压未知，先显示 --.--V */
         }
         UpdateShowUI(1U);
       }
@@ -517,51 +658,137 @@ void KeyHandle(uint8_t key)
     case VOL_PAGE:
       if (key == SW2PRESS)
       {
-        systemparam.setVolValue = (systemparam.setVolValue >= VOL_12V)
-                                  ? VOL_1V8
-                                  : (uint8_t)(systemparam.setVolValue + 1U);
+        StepVol(1);
       }
       else if (key == SW3PRESS)
       {
-        systemparam.setVolValue = (systemparam.setVolValue <= VOL_1V8)
-                                  ? VOL_12V
-                                  : (uint8_t)(systemparam.setVolValue - 1U);
+        StepVol(-1);
       }
       else
       {
         break;
       }
-      volHoldStart = HAL_GetTick();
-      if (systemparam.isOpen == ENABLE)
-      {
-        OpenPowerSwitch(systemparam.setVolValue);
-        lastOpenTick = HAL_GetTick();
-      }
-      UpdateShowUI(1U);
+      repeatKey = key;
+      repeatStartTick = HAL_GetTick();
+      lastRepeatTick = repeatStartTick;
       break;
 
     case CUR_PAGE:
       if (key == SW2PRESS)
       {
-        systemparam.protectValue = (systemparam.protectValue >= 1500U)
-                                   ? 200U
-                                   : (systemparam.protectValue + 100U);
+        StepProtect(1);
       }
       else if (key == SW3PRESS)
       {
-        systemparam.protectValue = (systemparam.protectValue <= 200U)
-                                   ? 1500U
-                                   : (systemparam.protectValue - 100U);
+        StepProtect(-1);
       }
       else
       {
         break;
       }
-      UpdateShowUI(0U);
+      repeatKey = key;
+      repeatStartTick = HAL_GetTick();
+      lastRepeatTick = repeatStartTick;
       break;
 
     default:
       break;
+  }
+}
+
+void StepVol(int8_t dir)
+{
+  if (dir > 0)
+  {
+    systemparam.setVolValue = (systemparam.setVolValue >= VOL_12V)
+                              ? VOL_1V8
+                              : (uint8_t)(systemparam.setVolValue + 1U);
+  }
+  else
+  {
+    systemparam.setVolValue = (systemparam.setVolValue <= VOL_1V8)
+                              ? VOL_12V
+                              : (uint8_t)(systemparam.setVolValue - 1U);
+  }
+
+  /* 1.8V 支路（TLV75718 限流 1.55A）能力有限，进入该档时压低保护阈值 */
+  if ((systemparam.setVolValue == VOL_1V8) &&
+      (systemparam.protectValue > PROTECT_1V8_MAX_MA))
+  {
+    systemparam.protectValue = PROTECT_1V8_MAX_MA;
+  }
+
+  volHoldStart = HAL_GetTick();
+  if (systemparam.isOpen == ENABLE)
+  {
+    OpenPowerSwitch(systemparam.setVolValue);
+    lastOpenTick = HAL_GetTick();
+  }
+  UpdateShowUI(1U);
+}
+
+void StepProtect(int8_t dir)
+{
+  uint16_t maxMa = (systemparam.setVolValue == VOL_1V8)
+                   ? PROTECT_1V8_MAX_MA
+                   : PROTECT_MAX_MA;
+
+  if (dir > 0)
+  {
+    systemparam.protectValue = (systemparam.protectValue >= maxMa)
+                               ? PROTECT_MIN_MA
+                               : (uint16_t)(systemparam.protectValue + PROTECT_STEP_MA);
+  }
+  else
+  {
+    systemparam.protectValue = (systemparam.protectValue <= PROTECT_MIN_MA)
+                               ? maxMa
+                               : (uint16_t)(systemparam.protectValue - PROTECT_STEP_MA);
+  }
+
+  UpdateShowUI(0U);
+}
+
+void RepeatHandle(void)
+{
+  uint32_t now;
+
+  if (repeatKey == NoPRESS)
+  {
+    return;
+  }
+
+  now = HAL_GetTick();
+
+  if (keyHeld(repeatKey) == 0U)
+  {
+    repeatKey = NoPRESS;
+    return;
+  }
+
+  if ((now - repeatStartTick) < KEY_REPEAT_DELAY_MS)
+  {
+    return;
+  }
+
+  if ((now - lastRepeatTick) < KEY_REPEAT_RATE_MS)
+  {
+    return;
+  }
+
+  lastRepeatTick = now;
+
+  if (systemparam.currentPage == VOL_PAGE)
+  {
+    StepVol((repeatKey == SW2PRESS) ? 1 : -1);
+  }
+  else if (systemparam.currentPage == CUR_PAGE)
+  {
+    StepProtect((repeatKey == SW2PRESS) ? 1 : -1);
+  }
+  else
+  {
+    repeatKey = NoPRESS;
   }
 }
 

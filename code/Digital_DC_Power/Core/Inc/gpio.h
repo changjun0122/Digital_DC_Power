@@ -64,6 +64,7 @@ void MX_GPIO_Init(void);
 void setch224(uint8_t vol);
 void RelaySet(GPIO_TypeDef *port, uint16_t pin, uint8_t state);
 void OpenPowerSwitch(uint8_t vol);
+void PowerSwitchPoll(void);
 void ClosePowerSwitch(void);
 uint8_t keyScanf(void);
 uint8_t keyHeld(uint8_t key);
