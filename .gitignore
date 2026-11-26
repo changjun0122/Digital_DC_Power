@@ -1,0 +1,32 @@
+# ---- 构建产物（STM32CubeIDE / GCC） ----
+Debug/
+Release/
+*.o
+*.d
+*.elf
+*.map
+*.list
+*.su
+*.cyclo
+*.axf
+*.hex
+*.bin
+*.out
+
+# ---- IDE 本地配置 ----
+.settings/
+.metadata/
+*.launch
+.cproject.bak
+
+# ---- 大文件（交互式 BOM 约 44MB，单独存放不进仓库） ----
+02_生产与物料/InteractiveBOM_*.html
+
+# ---- 系统 / 编辑器临时文件 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+*~
+
+# ---- 工作区内部数据（Agent 笔记、备份，不入版本库） ----
+.workbuddy/
