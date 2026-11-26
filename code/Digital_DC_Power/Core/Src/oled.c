@@ -17,9 +17,13 @@ static void OLED_WriteCmd(uint8_t cmd)
 
 static void OLED_SetPos(uint8_t x, uint8_t page)
 {
-  OLED_WriteCmd((uint8_t)(0xB0U | (page & 0x07U)));
-  OLED_WriteCmd((uint8_t)(0x00U | (x & 0x0FU)));
-  OLED_WriteCmd((uint8_t)(0x10U | ((x >> 4) & 0x0FU)));
+  uint8_t buf[4];
+
+  buf[0] = OLED_CTRL_CMD;
+  buf[1] = (uint8_t)(0xB0U | (page & 0x07U));
+  buf[2] = (uint8_t)(0x00U | (x & 0x0FU));
+  buf[3] = (uint8_t)(0x10U | ((x >> 4) & 0x0FU));
+  (void)HAL_I2C_Master_Transmit(&hi2c1, OLED_ADDR, buf, 4U, OLED_TIMEOUT);
 }
 
 static void OLED_FillPage(uint8_t page, uint8_t value)
@@ -180,11 +184,11 @@ void OLED_ShowCN(uint8_t x, uint8_t page, uint8_t idx, uint8_t invert)
 
 void OLED_ClearBlock(uint8_t x, uint8_t page, uint8_t width)
 {
-  uint8_t buf[OLED_WIDTH + 1U];
+  uint8_t buf[32U + 1U];
   uint8_t p;
   uint8_t i;
 
-  if ((page >= (OLED_PAGES - 1U)) || (width == 0U) ||
+  if ((page >= (OLED_PAGES - 1U)) || (width == 0U) || (width > 32U) ||
       (((uint16_t)x + width) > OLED_WIDTH))
   {
     return;

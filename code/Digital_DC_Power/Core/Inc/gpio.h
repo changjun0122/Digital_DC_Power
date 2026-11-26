@@ -45,6 +45,10 @@ extern "C" {
 #define VOL_9V0                 0x13U
 #define VOL_12V                 0x14U
 
+/* 时序参数 */
+#define PD_SETTLE_MS            500U   /* 切 PD 档后等待协商完成 */
+#define KEY_DEBOUNCE_MS         20U    /* 按键消抖窗口 */
+
 /* 按键返回值 */
 #define NoPRESS                 0xFFU
 #define SW1PRESS                0x04U
@@ -58,14 +62,11 @@ void MX_GPIO_Init(void);
 /* USER CODE BEGIN Prototypes */
 
 void setch224(uint8_t vol);
-void control1V8(uint8_t state);
-void control3V3(uint8_t state);
-void controlVBUS(uint8_t state);
+void RelaySet(GPIO_TypeDef *port, uint16_t pin, uint8_t state);
 void OpenPowerSwitch(uint8_t vol);
 void ClosePowerSwitch(void);
 uint8_t keyScanf(void);
-void keyTick(void);
-uint8_t keyGetEvent(void);
+uint8_t keyHeld(uint8_t key);
 
 /* USER CODE END Prototypes */
 

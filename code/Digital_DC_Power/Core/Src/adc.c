@@ -143,15 +143,21 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
   *         且 rank 顺序为 CH0(电流) -> CH5(电压)。因此必须成对调用：
   *         第一次返回 CH0，第二次返回 CH5。调用前需 HAL_ADC_Start()，
   *         两次读完后需 HAL_ADC_Stop()。
-  * @retval 12 位右对齐原始值（0~4095），超时返回 0
-  */
+  * @retval 12 位右对齐原始值（0~4095）；超时返回上一次有效值
+ */
 uint16_t getAdcValue(void)
 {
-  uint16_t value = 0;
+  static uint16_t lastValid = 0U;
+  uint16_t value;
 
   if (HAL_ADC_PollForConversion(&hadc, 10U) == HAL_OK)
   {
-    value = (uint16_t)HAL_ADC_GetValue(&hadc);
+    lastValid = (uint16_t)HAL_ADC_GetValue(&hadc);
+    value = lastValid;
+  }
+  else
+  {
+    value = lastValid;
   }
 
   return value;

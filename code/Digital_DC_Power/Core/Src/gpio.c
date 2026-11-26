@@ -123,29 +123,14 @@ void setch224(uint8_t vol)
 }
 
 /**
-  * @brief  1.8V 支路继电器控制（CON_1V8 -> PA4，低电平导通）
+  * @brief  继电器统一控制（GAQY212GHA，低电平导通）
+  * @param  port : CON_xxx_GPIO_Port
+  * @param  pin  : CON_xxx_Pin
+  * @param  state: OPENPOWER / CLOSEPOWER
   */
-void control1V8(uint8_t state)
+void RelaySet(GPIO_TypeDef *port, uint16_t pin, uint8_t state)
 {
-  HAL_GPIO_WritePin(CON_1V8_GPIO_Port, CON_1V8_Pin,
-                    (state == OPENPOWER) ? GPIO_PIN_RESET : GPIO_PIN_SET);
-}
-
-/**
-  * @brief  3.3V 支路继电器控制（CON_3V3 -> PA3，低电平导通）
-  */
-void control3V3(uint8_t state)
-{
-  HAL_GPIO_WritePin(CON_3V3_GPIO_Port, CON_3V3_Pin,
-                    (state == OPENPOWER) ? GPIO_PIN_RESET : GPIO_PIN_SET);
-}
-
-/** 
-  * @brief  Type-C VBUS 支路继电器控制（CON_VBUS -> PA2，低电平导通）
-  */
-void controlVBUS(uint8_t state)
-{
-  HAL_GPIO_WritePin(CON_VBUS_GPIO_Port, CON_VBUS_Pin,
+  HAL_GPIO_WritePin(port, pin,
                     (state == OPENPOWER) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
@@ -160,16 +145,16 @@ void OpenPowerSwitch(uint8_t vol)
   ClosePowerSwitch();
 
   setch224(vol);
-  HAL_Delay(500U);
+  HAL_Delay(PD_SETTLE_MS);
 
   switch (vol)
   {
-    case VOL_1V8: control1V8(OPENPOWER); break;
-    case VOL_3V3: control3V3(OPENPOWER); break;
+    case VOL_1V8: RelaySet(CON_1V8_GPIO_Port, CON_1V8_Pin, OPENPOWER); break;
+    case VOL_3V3: RelaySet(CON_3V3_GPIO_Port, CON_3V3_Pin, OPENPOWER); break;
     case VOL_5V0:
     case VOL_9V0:
     case VOL_12V:
-    default:      controlVBUS(OPENPOWER); break;
+    default:      RelaySet(CON_VBUS_GPIO_Port, CON_VBUS_Pin, OPENPOWER); break;
   }
 }
 
@@ -178,9 +163,9 @@ void OpenPowerSwitch(uint8_t vol)
   */
 void ClosePowerSwitch(void)
 {
-  control1V8(CLOSEPOWER);
-  control3V3(CLOSEPOWER);
-  controlVBUS(CLOSEPOWER);
+  RelaySet(CON_1V8_GPIO_Port, CON_1V8_Pin, CLOSEPOWER);
+  RelaySet(CON_3V3_GPIO_Port, CON_3V3_Pin, CLOSEPOWER);
+  RelaySet(CON_VBUS_GPIO_Port, CON_VBUS_Pin, CLOSEPOWER);
 }
 
 /**
@@ -221,7 +206,7 @@ uint8_t keyScanf(void)
       raw[i] = level;
       changeTick[i] = now;
     }
-    else if ((stable[i] != level) && ((now - changeTick[i]) >= 20U))
+    else if ((stable[i] != level) && ((now - changeTick[i]) >= KEY_DEBOUNCE_MS))
     {
       stable[i] = level;
       if ((level == 0U) && (result == NoPRESS))
@@ -234,29 +219,24 @@ uint8_t keyScanf(void)
   return result;
 }
 
-/* SysTick 1ms 调用：扫描不依赖主循环，避免 HAL_Delay 期间漏按 */
-static volatile uint8_t keyPending = NoPRESS;
-
-void keyTick(void)
+/**
+  * @brief  查询按键当前是否仍被按住（不消抖，仅供长按连发节拍判断）
+  * @param  key: SW1PRESS / SW2PRESS / SW3PRESS
+  * @retval 1=按住 0=松开或参数非法
+  */
+uint8_t keyHeld(uint8_t key)
 {
-  uint8_t k = keyScanf();
-
-  if (k != NoPRESS)
+  switch (key)
   {
-    keyPending = k;
+    case SW1PRESS:
+      return (HAL_GPIO_ReadPin(SW1_GPIO_Port, SW1_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+    case SW2PRESS:
+      return (HAL_GPIO_ReadPin(SW2_GPIO_Port, SW2_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+    case SW3PRESS:
+      return (HAL_GPIO_ReadPin(SW3_GPIO_Port, SW3_Pin) == GPIO_PIN_RESET) ? 1U : 0U;
+    default:
+      return 0U;
   }
-}
-
-uint8_t keyGetEvent(void)
-{
-  uint8_t k;
-
-  __disable_irq();
-  k = keyPending;
-  keyPending = NoPRESS;
-  __enable_irq();
-
-  return k;
 }
 
 /* USER CODE END 2 */

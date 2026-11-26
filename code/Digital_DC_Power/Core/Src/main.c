@@ -43,6 +43,13 @@ enum
   VOL_PAGE,
   CUR_PAGE
 };
+
+typedef enum
+{
+  PROT_NONE = 0U,
+  PROT_OCP,
+  PROT_UVP
+} ProtectReason;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -50,8 +57,7 @@ enum
 #define SAMPLE_NUM    100U
 #define SAMPLE_DROP   10U
 /* 电压采样：R3=10K 上 / R6=3.3K 下，分压比 3.3/(10+3.3)=0.2481
- * ADC 满量程 3.3V 对应 IN1- = 3.3/0.2481 = 13.30V，故满量程取 13300mV
- * （旧值 16600 会让读数偏高约 25%） */
+ * ADC 满量程 3.3V 对应 VOUT = 3.3/0.2481 = 13.30V，故满量程取 13300mV */
 #define VOL_FULL_MV   13300UL
 #define CUR_FULL_MA   3300UL
 #define ADC_FULL      4095UL
@@ -59,6 +65,32 @@ enum
 #define PROTECT_BLANK_MS  800U
 /* 切档后电压显示静默期，等 PD 重新协商 + VBUS 泄放到目标档 */
 #define VOL_SETTLE_MS     1200U
+
+/* 保护阈值档位：可调范围 / 步进 / 1.8V 支路硬件上限 */
+#define PROTECT_MAX_MA      1500U
+#define PROTECT_MIN_MA      200U
+#define PROTECT_STEP_MA     100U
+#define PROTECT_1V8_MAX_MA  900U
+
+/* 长按连发：按住多久开始连发、连发间隔 */
+#define KEY_REPEAT_DELAY_MS 500U
+#define KEY_REPEAT_RATE_MS  150U
+
+/* 主循环节拍 */
+#define SAMPLE_PERIOD_MS    50U
+#define UI_REFRESH_MS       200U
+
+/* 屏幕坐标：左标签 / 数值列 / 档位列 / 阈值列 */
+#define UI_LABEL_X          0U
+#define UI_VALUE_X          36U
+#define UI_GEAR_X           96U
+#define UI_THRESH_X         92U
+/* 行（页）：状态 / 保护详情 / 电压 / 功率统计 / 电流 */
+#define UI_ROW_STATUS       0U
+#define UI_ROW_DETAIL       2U
+#define UI_ROW_VOL          3U
+#define UI_ROW_STAT         5U
+#define UI_ROW_CUR          6U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -71,13 +103,24 @@ enum
 /* USER CODE BEGIN PV */
 SystemParam systemparam;
 
+/* 欠压阈值表：下标 = setVolValue - VOL_1V8 */
+static const uint16_t underLimitMv[5] = {1000U, 2000U, 3000U, 5000U, 7000U};
+
 static uint16_t adcVolBuf[SAMPLE_NUM];
 static uint16_t adcCurBuf[SAMPLE_NUM];
 static uint32_t volMv = 0U;
 static uint32_t curMa = 0U;
-static uint8_t  protectFlag = 0U;
-static uint32_t lastOpenTick = 0U;   /* 上次开启输出的时刻，用于保护静默期 */
-static uint32_t volHoldStart = 0U;   /* 切档时刻，用于电压显示静默期 */
+static uint32_t powerMw = 0U;          /* 瞬时功率 mW */
+static uint32_t energyUwh = 0U;        /* 累计能量 uWh */
+static uint32_t lastEnergyTick = 0U;
+static ProtectReason protectReason = PROT_NONE;
+static uint32_t tripMa = 0U;           /* 保护动作瞬间的电流 */
+static uint32_t tripMv = 0U;           /* 保护动作瞬间的电压 */
+static uint32_t lastOpenTick = 0U;     /* 上次开启输出的时刻，用于保护静默期 */
+static uint32_t volHoldStart = 0U;     /* 切档时刻，用于电压显示静默期 */
+static uint8_t  repeatKey = NoPRESS;   /* 正在连发的按键 */
+static uint32_t repeatStartTick = 0U;
+static uint32_t lastRepeatTick = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -87,12 +130,17 @@ void KeyHandle(uint8_t key);
 uint16_t FilterSample(uint16_t *buf, uint8_t len);
 void SampleAndCalc(void);
 void ProtectCheck(void);
+void ProtectTrip(ProtectReason reason);
 void DefaultShowUI(void);
 void UpdateShowUI(uint8_t refresh);
+void ShowProtectDetail(void);
 void FormatVol(char *s, uint32_t mv);
-void FormatCur(char *s, uint32_t ma);
 void FormatMa(char *s, uint32_t ma);
+void FormatStat(char *s);
 const char *GearName(uint8_t vol);
+void StepVol(int8_t dir);
+void StepProtect(int8_t dir);
+void RepeatHandle(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -134,12 +182,16 @@ int main(void)
   MX_ADC_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_ADCEx_Calibration_Start(&hadc);
+  if (HAL_ADCEx_Calibration_Start(&hadc) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   systemparam.currentPage  = POWER_PAGE;
   systemparam.isOpen       = DISABLE;
   systemparam.setVolValue  = VOL_5V0;
   systemparam.protectValue = 1000U;
+  lastEnergyTick = HAL_GetTick();
 
   setch224(VOL_5V0);
   ClosePowerSwitch();
@@ -160,15 +212,16 @@ int main(void)
     {
       KeyHandle(keyValue);
     }
+    RepeatHandle();
 
-    if ((HAL_GetTick() - lastSampleTick) >= 50U)
+    if ((HAL_GetTick() - lastSampleTick) >= SAMPLE_PERIOD_MS)
     {
       lastSampleTick = HAL_GetTick();
       SampleAndCalc();
       ProtectCheck();
     }
 
-    if ((HAL_GetTick() - lastUiTick) >= 200U)
+    if ((HAL_GetTick() - lastUiTick) >= UI_REFRESH_MS)
     {
       lastUiTick = HAL_GetTick();
       UpdateShowUI(0U);
